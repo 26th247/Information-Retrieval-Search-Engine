@@ -1,0 +1,104 @@
+import pandas as pd
+import json
+from elasticsearch import Elasticsearch
+from sklearn.feature_extraction.text import CountVectorizer
+import re
+from nltk.stem import LancasterStemmer
+
+# function to flip the list so most important is on top
+def sort_coo(coo_matrix):
+    tuples = zip(coo_matrix.col, coo_matrix.data)
+    return sorted(tuples, key=lambda x: (x[1], x[0]), reverse=True)
+
+# function to help select the most important words
+def extract_topn_from_vector(feature_names, sorted_items, topn=30):
+    """get the feature names and tf-idf score of top n items"""
+
+#use only topn items from vector
+    sorted_items = sorted_items[:topn]
+    score_vals = []
+    feature_vals = []
+    
+  #word index and corresponding tf-idf score
+    for idx, score in sorted_items:
+        score_vals.append(round(score, 3))
+        feature_vals.append(feature_names[idx])
+
+    results= {}
+    for idx in range(len(feature_vals)):
+        results[feature_vals[idx]]=score_vals[idx]
+    
+    return results
+
+elastic_search = Elasticsearch()
+load = pd.read_csv ('metadata.csv')
+for num in range(0,999):
+    try:
+        article_body = json.load(open(files.iloc[num]['pdf_json_files']))['body_text']
+        string = str(json.dumps(article_body))
+        all_text = ""
+        
+        for k in string.split("\n"):
+             all_text += re.sub(r"[^a-zA-Z0-9]+", ' ', k)
+
+#retrieve stop words that are common on most scholarly articles and particularly this one
+        with open("stopwords.txt", 'r', encoding="utf-8") as f:
+            stopwords = f.readlines()
+            stop_set = set(m.strip() for m in stopwords)    
+            stopwords=frozenset(stop_set)
+            
+            
+#get rid of stop words
+        cv=CountVectorizer(stop_words=stopwords)
+    
+    
+#fit counter vector to get most used words
+        word_count_vector=cv.fit_transform([all_text])    
+        feature_names=cv.get_feature_names()
+
+        
+        tfidf_transformer=TfidfTransformer(smooth_idf=True,use_idf=True)
+        tfidf_transformer.fit(word_count_vector)
+        tf_idf_vector=tfidf_transformer.transform(word_count_vector)
+
+        
+#sort words into relevance
+
+        sorted_items=sort_coo(tf_idf_vector.tocoo())
+
+#select number of words to take into account, in this case the top 10
+
+        keywords=extract_topn_from_vector(feature_names,sorted_items,10)
+    
+    
+    
+#algorithim to stem the most common words, then place them into an array
+
+        lancaster=LancasterStemmer()
+
+        final_body_words = []
+        for k in keywords:
+            final_body_words.append(lancaster.stem(k))
+            
+            
+        json_info = {"Title":load.loc[num]['title'],"Date":load.loc[num]['publish_time'],"journal":load.loc[num]['journal'],"Authors":load.loc[num]['authors'],"Url":load.loc[num]['url'],"Words":final_body_words}
+
+        elastic_search.index(index="documents",id=num ,body=json_info)
+    except:
+        continue
+
+print("Input query to look for, words, author or date of publication")
+input_user = input("Word:")
+try: 
+    search = elastic_search.search(index="documents", body={"query": {"match": {"Words": input_user}}})['hits']['hits'][0]['_source']
+    print("Details of search: " + "\n" + search['Title'] + "\n" + search['Date'] + "\n" + search['journal'] + "\n" + search['Authors']+ "\n" + search['Url'])
+except:
+    try:
+        search = elastic_search.search(index="documents", body={"query": {"match": {"Author": input_user}}})['hits']['hits'][0]['_source']
+        print("Details of search: " + "\n" + search['Title'] + "\n" + search['Date'] + "\n" + search['journal'] + "\n" + search['Authors']+ "\n" + search['Url'])
+    except:
+        try:
+            search = elastic_search.search(index="documents", body={"query": {"match": {"Date": input_user}}})['hits']['hits'][0]['_source']
+            print("Details of search: " + "\n" + search['Title'] + "\n" + search['Date'] + "\n" + search['journal'] + "\n" + search['Authors']+ "\n" + search['Url'])
+        except:
+            print("Not found")
